@@ -1,8 +1,14 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional
+from bson import ObjectId
 
-app = FastAPI()
+from database import db, create_document, get_documents
+from schemas import Cat
+
+app = FastAPI(title="Rare Cats API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,7 +20,7 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
+    return {"message": "Rare Cats API Running"}
 
 @app.get("/api/hello")
 def hello():
@@ -33,36 +39,66 @@ def test_database():
     }
     
     try:
-        # Try to import database module
-        from database import db
-        
         if db is not None:
             response["database"] = "✅ Available"
             response["database_url"] = "✅ Configured"
             response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
             response["connection_status"] = "Connected"
             
-            # Try to list collections to verify connectivity
             try:
                 collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
+                response["collections"] = collections[:10]
                 response["database"] = "✅ Connected & Working"
             except Exception as e:
                 response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
         else:
             response["database"] = "⚠️  Available but not initialized"
             
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
     except Exception as e:
         response["database"] = f"❌ Error: {str(e)[:50]}"
     
-    # Check environment variables
     import os
     response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
     response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
     
     return response
+
+# API models for requests
+class CatCreate(BaseModel):
+    name: str
+    breed: str
+    price: float
+    description: Optional[str] = None
+    image: Optional[str] = None
+    gallery: Optional[List[str]] = []
+    age_months: Optional[int] = None
+    gender: Optional[str] = None
+    temperament: Optional[List[str]] = []
+    location: Optional[str] = None
+
+
+@app.post("/api/cats")
+def create_cat(cat: CatCreate):
+    # Validate via Pydantic schema for collection
+    doc = Cat(**cat.model_dump())
+    cat_id = create_document("cat", doc)
+    return {"id": cat_id}
+
+
+@app.get("/api/cats")
+def list_cats(limit: Optional[int] = 50, breed: Optional[str] = None, available: Optional[bool] = True):
+    filter_dict = {}
+    if breed:
+        filter_dict["breed"] = breed
+    if available is not None:
+        filter_dict["available"] = available
+
+    docs = get_documents("cat", filter_dict=filter_dict, limit=limit)
+    # Convert ObjectId to string
+    for d in docs:
+        if isinstance(d.get("_id"), ObjectId):
+            d["id"] = str(d.pop("_id"))
+    return {"items": docs}
 
 
 if __name__ == "__main__":
